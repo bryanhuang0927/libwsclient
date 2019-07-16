@@ -1,0 +1,73 @@
+CMAKE_MINIMUM_REQUIRED(VERSION 2.8)
+project(wsclient C)
+
+if(NOT DEFINED INSTALL_PATH)
+  set (CMAKE_INSTALL_PREFIX ${PROJECT_SOURCE_DIR}/prebuilt)
+else()
+  set (CMAKE_INSTALL_PREFIX ${INSTALL_PATH})
+endif()
+message(STATUS "CMAKE_INSTALL_PREFIX is set to ${CMAKE_INSTALL_PREFIX}")
+
+if(NOT DEFINED BUILD_STATIC)
+  set(BUILD_STATIC 0)
+endif()
+
+if(POLICY CMP0015)
+  cmake_policy(SET CMP0015 NEW)
+endif()
+
+if(POLICY CMP0042)
+  cmake_policy(SET CMP0042 NEW)
+endif()
+
+macro(use_c99)
+  if (CMAKE_VERSION VERSION_LESS "3.1")
+    if (CMAKE_C_COMPILER_ID STREQUAL "GNU")
+      set (CMAKE_C_FLAGS "-std=gnu99 ${CMAKE_C_FLAGS}")
+    endif ()
+  else ()
+    set (CMAKE_C_STANDARD 99)
+  endif ()
+endmacro(use_c99)
+
+use_c99()
+
+# Check dependent definitions
+if(NOT DEFINED OPENSSL_ROOT_DIR)
+  message(FATAL_ERROR "Please define [OPENSSL_ROOT_DIR]")
+endif()
+
+# link dependency
+include_directories(${PROJECT_SOURCE_DIR})
+include_directories(${OPENSSL_ROOT_DIR}/include)
+link_directories(${OPENSSL_ROOT_DIR}/lib)
+
+aux_source_directory(${PROJECT_SOURCE_DIR} SRC_FILES)
+add_library(${PROJECT_NAME} SHARED ${SRC_FILES})
+if(${CMAKE_SYSTEM_NAME} STREQUAL "Android")
+  set_target_properties(${PROJECT_NAME} PROPERTIES LINK_FLAGS "-Wl,--whole-archive,-lcrypto,-lssl,--no-whole-archive")
+endif()
+if(${BUILD_STATIC} EQUAL 1)
+  add_library(${PROJECT_NAME}-static STATIC ${SRC_FILES})
+  set_target_properties(${PROJECT_NAME}-static PROPERTIES OUTPUT_NAME "${PROJECT_NAME}")
+endif()
+
+if (${CMAKE_SYSTEM_NAME} STREQUAL "Android")
+  find_library(log-lib log)
+  target_link_libraries(${PROJECT_NAME} log crypto ssl)
+  if(${BUILD_STATIC} EQUAL 1)
+    target_link_libraries(${PROJECT_NAME}-static log crypto ssl)
+  endif()
+else()
+  target_link_libraries(${PROJECT_NAME} crypto ssl)
+  if(${BUILD_STATIC} EQUAL 1)
+    target_link_libraries(${PROJECT_NAME}-static crypto ssl)
+  endif()
+endif()
+
+file(GLOB WSCLIENT_HEADERS ${PROJECT_SOURCE_DIR}/*.h)
+install(FILES ${WSCLIENT_HEADERS} DESTINATION include)
+install(TARGETS ${PROJECT_NAME} LIBRARY DESTINATION lib)
+if(${BUILD_STATIC} EQUAL 1)
+  install(TARGETS ${PROJECT_NAME}-static ARCHIVE DESTINATION lib)
+endif()
