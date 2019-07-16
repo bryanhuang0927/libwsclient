@@ -1,5 +1,8 @@
 # WebSocket client for C
 
+[![](https://travis-ci.com/morrowind/libwsclient.svg?branch=master)](https://travis-ci.com/morrowind/libwsclient)
+![](https://img.shields.io/badge/platform-android%7Clinux%7Cosx-blue.svg)
+
 ## This project is based on [https://github.com/payden/libwsclient](https://github.com/payden/libwsclient)
 
 Due to that project is not in maintenance any more, I  would continue the work here:
