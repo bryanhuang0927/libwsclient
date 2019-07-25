@@ -8,6 +8,10 @@
 
 #include <uri.h>
 
+#ifdef _MEMDBG_
+#include <memdbg.h>
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif

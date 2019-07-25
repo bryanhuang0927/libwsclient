@@ -25,6 +25,10 @@
 #include <uri.h>
 #include <wsclient.h>
 
+#ifdef _MEMDBG_
+#include <memdbg.h>
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -260,7 +264,7 @@ static void *wsclient_beat_thread(wsclient *c) {
         }
         pthread_mutex_lock(&c->beat_lock);
         c->beat_remain_ms = c->beat_interval + c->beat_start_ts - get_current_time_millis();
-        printf("beat countdown: %"PRId64"\n", c->beat_remain_ms);
+        //printf("beat countdown: %"PRId64"\n", c->beat_remain_ms);
         if(c->beat_interval <= 0) {
             pthread_mutex_unlock(&c->beat_lock);
             break;
@@ -748,13 +752,12 @@ static void show_certs(SSL *ssl) {
     char *line;
     cert = SSL_get_peer_certificate(ssl);
     if (cert != NULL) {
+        char line[256];
         printf("cert info:\n");
-        line = X509_NAME_oneline(X509_get_subject_name(cert), 0, 0);
+        X509_NAME_oneline(X509_get_subject_name(cert), line, sizeof(line)-1);
         printf("  cert: %s\n", line);
-        free(line);
-        line = X509_NAME_oneline(X509_get_issuer_name(cert), 0, 0);
+        X509_NAME_oneline(X509_get_issuer_name(cert), line, sizeof(line)-1);
         printf("  from: %s\n", line);
-        free(line);
         X509_free(cert);
     } else {
         fprintf(stderr, "No cert info!\n");
