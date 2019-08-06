@@ -100,6 +100,7 @@ typedef struct _wsclient {
     on_message_cb onmessage;
     on_error_cb onerror;
     on_close_cb onclose;
+    void *cbdata;
 
 	int sockfd;
 	unsigned int flags;
@@ -220,6 +221,7 @@ wsclient_t *wsclient_new(wsclient_config_t *config) {
     c->onmessage = config->message_cb;
     c->onerror = config->error_cb;
     c->onclose = config->close_cb;
+    c->cbdata = config->cbdata;
 
     c->flags |= CLIENT_CONNECTING;
 
@@ -337,13 +339,13 @@ static void *wsclient_run_thread(wsclient *c) {
         if(c->onerror) {
             err = wsclient_new_error(WS_RUN_THREAD_RECV_ERR);
             err->extra_code = n;
-            c->onerror((wsclient_t *)c, err);
+            c->onerror((wsclient_t *)c, err, c->cbdata);
             free(err);
             err = NULL;
         }
     }
     if(c->onclose) {
-        c->onclose((wsclient_t *)c);
+        c->onclose((wsclient_t *)c, c->cbdata);
     }
 
     if(c->beat_interval > 0) {
@@ -393,7 +395,7 @@ void wsclient_shutdown(wsclient *c) {
         if(c->onerror) {
             err = wsclient_new_error(WS_DO_CLOSE_SEND_ERR);
             err->extra_code = n;
-            c->onerror((wsclient_t *)c, err);
+            c->onerror((wsclient_t *)c, err, c->cbdata);
             free(err);
             err = NULL;
         }
@@ -427,7 +429,7 @@ static void wsclient_ping(wsclient *c) {
         if(c->onerror) {
             err = wsclient_new_error(WS_DO_PING_SEND_ERR);
             err->extra_code = n;
-            c->onerror((wsclient_t *)c, err);
+            c->onerror((wsclient_t *)c, err, c->cbdata);
             free(err);
             err = NULL;
         }
@@ -458,7 +460,7 @@ static void wsclient_pong(wsclient *c) {
         if(c->onerror) {
             err = wsclient_new_error(WS_DO_PONG_SEND_ERR);
             err->extra_code = n;
-            c->onerror((wsclient_t *)c, err);
+            c->onerror((wsclient_t *)c, err, c->cbdata);
             free(err);
             err = NULL;
         }
@@ -499,7 +501,7 @@ static void wsclient_handle_control_frame(wsclient *c, wsclient_frame_t *ctl_fra
                     if(c->onerror) {
                         err = wsclient_new_error(WS_HANDLE_CTL_FRAME_SEND_ERR);
                         err->extra_code = n;
-                        c->onerror((wsclient_t *)c, err);
+                        c->onerror((wsclient_t *)c, err, c->cbdata);
                         free(err);
                         err = NULL;
                     }
@@ -529,7 +531,7 @@ static void wsclient_handle_control_frame(wsclient *c, wsclient_frame_t *ctl_fra
 					if(c->onerror) {
 						err = wsclient_new_error(WS_HANDLE_CTL_FRAME_SEND_ERR);
 						err->extra_code = n;
-						c->onerror((wsclient_t *)c, err);
+						c->onerror((wsclient_t *)c, err, c->cbdata);
 						free(err);
 						err = NULL;
 					}
@@ -608,7 +610,7 @@ static void wsclient_dispatch_message(wsclient *c, wsclient_frame_t *current) {
     if(current == NULL) {
         if(c->onerror) {
             err = wsclient_new_error(WS_DISPATCH_MESSAGE_NULL_PTR_ERR);
-            c->onerror((wsclient_t *)c, err);
+            c->onerror((wsclient_t *)c, err, c->cbdata);
             free(err);
             err = NULL;
         }
@@ -635,7 +637,7 @@ static void wsclient_dispatch_message(wsclient *c, wsclient_frame_t *current) {
     msg->payload_len = message_offset;
     msg->payload = message_payload;
     if(c->onmessage != NULL) {
-        c->onmessage((wsclient_t *)c, msg);
+        c->onmessage((wsclient_t *)c, msg, c->cbdata);
     } else {
         fprintf(stderr, "No onmessage call back registered with wsclient.\n");
     }
@@ -675,7 +677,7 @@ static int wsclient_complete_frame(wsclient *c, wsclient_frame_t *frame) {
     if((*(frame->rawdata+1) & 0x80) != 0x0) {
         if(c->onerror) {
             err = wsclient_new_error(WS_COMPLETE_FRAME_MASKED_ERR);
-            c->onerror((wsclient_t *)c, err);
+            c->onerror((wsclient_t *)c, err, c->cbdata);
             free(err);
             err = NULL;
         }
@@ -802,7 +804,7 @@ static void *wsclient_handshake_thread(wsclient *c) {
     if(sockfd < 0) {
         if(c->onerror) {
             err = wsclient_new_error(sockfd);
-            c->onerror((wsclient_t *)c, err);
+            c->onerror((wsclient_t *)c, err, c->cbdata);
             free(err);
         }
         return NULL;
@@ -896,7 +898,7 @@ static void *wsclient_handshake_thread(wsclient *c) {
     if(n == 0) {
         if(c->onerror) {
             err = wsclient_new_error(WS_HANDSHAKE_REMOTE_CLOSED_ERR);
-            c->onerror((wsclient_t *)c, err);
+            c->onerror((wsclient_t *)c, err, c->cbdata);
             free(err);
         }
         return NULL;
@@ -905,7 +907,7 @@ static void *wsclient_handshake_thread(wsclient *c) {
         if(c->onerror) {
             err = wsclient_new_error(WS_HANDSHAKE_RECV_ERR);
             err->extra_code = n;
-            c->onerror((wsclient_t *)c, err);
+            c->onerror((wsclient_t *)c, err, c->cbdata);
             free(err);
         }
         return NULL;
@@ -956,7 +958,7 @@ static void *wsclient_handshake_thread(wsclient *c) {
     if(!(flags & REQUEST_HAS_UPGRADE)) {
         if(c->onerror) {
             err = wsclient_new_error(WS_HANDSHAKE_NO_UPGRADE_ERR);
-            c->onerror((wsclient_t *)c, err);
+            c->onerror((wsclient_t *)c, err, c->cbdata);
             free(err);
         }
         return NULL;
@@ -964,7 +966,7 @@ static void *wsclient_handshake_thread(wsclient *c) {
     if(!(flags & REQUEST_HAS_CONNECTION)) {
         if(c->onerror) {
             err = wsclient_new_error(WS_HANDSHAKE_NO_CONNECTION_ERR);
-            c->onerror((wsclient_t *)c, err);
+            c->onerror((wsclient_t *)c, err, c->cbdata);
             free(err);
         }
         return NULL;
@@ -972,7 +974,7 @@ static void *wsclient_handshake_thread(wsclient *c) {
     if(!(flags & REQUEST_VALID_ACCEPT)) {
         if(c->onerror) {
             err = wsclient_new_error(WS_HANDSHAKE_BAD_ACCEPT_ERR);
-            c->onerror((wsclient_t *)c, err);
+            c->onerror((wsclient_t *)c, err, c->cbdata);
             free(err);
         }
         return NULL;
@@ -982,7 +984,7 @@ static void *wsclient_handshake_thread(wsclient *c) {
     c->flags &= ~CLIENT_CONNECTING;
     pthread_mutex_unlock(&c->lock);
     if(c->onopen != NULL) {
-        c->onopen((wsclient_t *)c);
+        c->onopen((wsclient_t *)c, c->cbdata);
     }
     printf("handshake OK (handshake thread exit)\n");
     return NULL;
@@ -1024,7 +1026,7 @@ static int wsclient_send_fragment(wsclient *c, char *text, int len, int flags) {
     if(c->flags & CLIENT_SENT_CLOSE_FRAME) {
         if(c->onerror) {
             err = wsclient_new_error(WS_SEND_AFTER_CLOSE_FRAME_ERR);
-            c->onerror((wsclient_t *)c, err);
+            c->onerror((wsclient_t *)c, err, c->cbdata);
             free(err);
         }
         return 0;
@@ -1032,7 +1034,7 @@ static int wsclient_send_fragment(wsclient *c, char *text, int len, int flags) {
     if(c->flags & CLIENT_CONNECTING) {
         if(c->onerror) {
             err = wsclient_new_error(WS_SEND_DURING_CONNECT_ERR);
-            c->onerror((wsclient_t *)c, err);
+            c->onerror((wsclient_t *)c, err, c->cbdata);
             free(err);
         }
         return 0;
@@ -1041,7 +1043,7 @@ static int wsclient_send_fragment(wsclient *c, char *text, int len, int flags) {
     if(text == NULL) {
         if(c->onerror) {
             err = wsclient_new_error(WS_SEND_NULL_DATA_ERR);
-            c->onerror((wsclient_t *)c, err);
+            c->onerror((wsclient_t *)c, err, c->cbdata);
             free(err);
         }
         return 0;
@@ -1067,7 +1069,7 @@ static int wsclient_send_fragment(wsclient *c, char *text, int len, int flags) {
     } else {
         if(c->onerror) {
             err = wsclient_new_error(WS_SEND_DATA_TOO_LARGE_ERR);
-            c->onerror((wsclient_t *)c, err);
+            c->onerror((wsclient_t *)c, err, c->cbdata);
             free(err);
         }
         return 0;
@@ -1111,7 +1113,7 @@ static int wsclient_send_fragment(wsclient *c, char *text, int len, int flags) {
     if(i < 0) {
         if(c->onerror) {
             err = wsclient_new_error(WS_SEND_SEND_ERR);
-            c->onerror((wsclient_t *)c, err);
+            c->onerror((wsclient_t *)c, err, c->cbdata);
             free(err);
         }
     }
@@ -1140,7 +1142,7 @@ int wsclient_send(wsclient *c, const uint8_t *bindata, size_t bindata_len)  {
     if(c->flags & CLIENT_SENT_CLOSE_FRAME) {
         if(c->onerror) {
             err = wsclient_new_error(WS_SEND_AFTER_CLOSE_FRAME_ERR);
-            c->onerror((wsclient_t *)c, err);
+            c->onerror((wsclient_t *)c, err, c->cbdata);
             free(err);
         }
         return 0;
@@ -1148,7 +1150,7 @@ int wsclient_send(wsclient *c, const uint8_t *bindata, size_t bindata_len)  {
     if(c->flags & CLIENT_CONNECTING) {
         if(c->onerror) {
             err = wsclient_new_error(WS_SEND_DURING_CONNECT_ERR);
-            c->onerror((wsclient_t *)c, err);
+            c->onerror((wsclient_t *)c, err, c->cbdata);
             free(err);
         }
         return 0;
@@ -1156,7 +1158,7 @@ int wsclient_send(wsclient *c, const uint8_t *bindata, size_t bindata_len)  {
     if(bindata == NULL || bindata_len == 0) {
         if(c->onerror) {
             err = wsclient_new_error(WS_SEND_NULL_DATA_ERR);
-            c->onerror((wsclient_t *)c, err);
+            c->onerror((wsclient_t *)c, err, c->cbdata);
             free(err);
         }
         return 0;
@@ -1183,7 +1185,7 @@ int wsclient_send(wsclient *c, const uint8_t *bindata, size_t bindata_len)  {
     } else {
         if(c->onerror) {
             err = wsclient_new_error(WS_SEND_DATA_TOO_LARGE_ERR);
-            c->onerror((wsclient_t *)c, err);
+            c->onerror((wsclient_t *)c, err, c->cbdata);
             free(err);
         }
         return 0;
@@ -1228,7 +1230,7 @@ int wsclient_send(wsclient *c, const uint8_t *bindata, size_t bindata_len)  {
     if(i < 0) {
         if(c->onerror) {
             err = wsclient_new_error(WS_SEND_SEND_ERR);
-            c->onerror((wsclient_t *)c, err);
+            c->onerror((wsclient_t *)c, err, c->cbdata);
             free(err);
             free(data);
             return 0;
@@ -1265,7 +1267,7 @@ int wsclient_send_text(wsclient *c, const char *text) {
     if(c->flags & CLIENT_SENT_CLOSE_FRAME) {
         if(c->onerror) {
             err = wsclient_new_error(WS_SEND_AFTER_CLOSE_FRAME_ERR);
-            c->onerror((wsclient_t *)c, err);
+            c->onerror((wsclient_t *)c, err, c->cbdata);
             free(err);
             err = NULL;
         }
@@ -1274,7 +1276,7 @@ int wsclient_send_text(wsclient *c, const char *text) {
     if(c->flags & CLIENT_CONNECTING) {
         if(c->onerror) {
             err = wsclient_new_error(WS_SEND_DURING_CONNECT_ERR);
-            c->onerror((wsclient_t *)c, err);
+            c->onerror((wsclient_t *)c, err, c->cbdata);
             free(err);
             err = NULL;
         }
@@ -1283,7 +1285,7 @@ int wsclient_send_text(wsclient *c, const char *text) {
     if(text == NULL) {
         if(c->onerror) {
             err = wsclient_new_error(WS_SEND_NULL_DATA_ERR);
-            c->onerror((wsclient_t *)c, err);
+            c->onerror((wsclient_t *)c, err, c->cbdata);
             free(err);
             err = NULL;
         }
@@ -1311,7 +1313,7 @@ int wsclient_send_text(wsclient *c, const char *text) {
     } else {
         if(c->onerror) {
             err = wsclient_new_error(WS_SEND_DATA_TOO_LARGE_ERR);
-            c->onerror((wsclient_t *)c, err);
+            c->onerror((wsclient_t *)c, err, c->cbdata);
             free(err);
             err = NULL;
         }
@@ -1354,7 +1356,7 @@ int wsclient_send_text(wsclient *c, const char *text) {
     if(i < 0) {
         if(c->onerror) {
             err = wsclient_new_error(WS_SEND_SEND_ERR);
-            c->onerror((wsclient_t *)c, err);
+            c->onerror((wsclient_t *)c, err, c->cbdata);
             free(err);
             err = NULL;
         }

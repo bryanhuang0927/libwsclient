@@ -52,10 +52,10 @@ typedef struct {
 	const char *str;
 } wsclient_error_t;
 
-typedef int (*on_open_cb)(wsclient_t *client);
-typedef int (*on_message_cb)(wsclient_t *client, wsclient_message_t *msg);
-typedef int (*on_error_cb)(wsclient_t *client, wsclient_error_t *err);
-typedef int (*on_close_cb)(wsclient_t *client);
+typedef int (*on_open_cb)(wsclient_t *client, void *cbdata);
+typedef int (*on_message_cb)(wsclient_t *client, wsclient_message_t *msg, void *cbdata);
+typedef int (*on_error_cb)(wsclient_t *client, wsclient_error_t *err, void *cbdata);
+typedef int (*on_close_cb)(wsclient_t *client, void *cbdata);
 
 typedef struct {
 	const char *uri; // server uri
@@ -65,6 +65,7 @@ typedef struct {
 	on_message_cb message_cb;
 	on_error_cb error_cb;
 	on_close_cb close_cb;
+	void *cbdata; // this cbdata will send back in on_xxx_cb parameter
 } wsclient_config_t;
 
 struct _wsclient_t {
