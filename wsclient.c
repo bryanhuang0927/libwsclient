@@ -7,7 +7,8 @@
 #include <unistd.h>
 #include <errno.h>
 #include <netdb.h>
-#include <pthread.h>
+#include "freertos/task.h"
+#include "freertos/semphr.h"
 #include <signal.h>
 #include <stdarg.h>
 #include <inttypes.h>
@@ -63,51 +64,51 @@ extern "C" {
 #define WS_FLAGS_SSL_INIT (1 << 0)
 
 typedef struct _wsclient_frame_t {
-	uint32_t fin;
-	uint32_t opcode;
-	size_t mask_offset;
-	size_t payload_offset;
-	size_t rawdata_idx;
-	size_t rawdata_sz;
-	int payload_len;
-	uint8_t *rawdata;
-	struct _wsclient_frame_t *next_frame;
-	struct _wsclient_frame_t *prev_frame;
-	uint8_t mask[4];
+    uint32_t fin;
+    uint32_t opcode;
+    size_t mask_offset;
+    size_t payload_offset;
+    size_t rawdata_idx;
+    size_t rawdata_sz;
+    int payload_len;
+    uint8_t *rawdata;
+    struct _wsclient_frame_t *next_frame;
+    struct _wsclient_frame_t *prev_frame;
+    uint8_t mask[4];
 } wsclient_frame_t;
 
 typedef struct _wsclient {
     // public: 
-	void (*run)(struct _wsclient *);
-	void (*shutdown)(struct _wsclient *);
-	int (*get_socket)(struct _wsclient *);
-	int (*send)(struct _wsclient *, const uint8_t *, size_t);
-	int (*send_text)(struct _wsclient *, const char *);
+    void (*run)(struct _wsclient *);
+    void (*shutdown)(struct _wsclient *);
+    int (*get_socket)(struct _wsclient *);
+    int (*send)(struct _wsclient *, const uint8_t *, size_t);
+    int (*send_text)(struct _wsclient *, const char *);
 
     // private:
-	pthread_t handshake_thread;
-	pthread_t run_thread;
-	pthread_t beat_thead;
+    TaskHandle_t handshake_task;
+    TaskHandle_t run_task;
+    TaskHandle_t beat_task;
 
-	pthread_mutex_t lock;
-	pthread_mutex_t send_lock;
-    pthread_mutex_t beat_lock;
+    SemaphoreHandle_t lock;
+    SemaphoreHandle_t send_lock;
+    SemaphoreHandle_t beat_lock;
 
-	uri_t *uri;
-	char *extra_header;
-	int64_t beat_interval, beat_remain_ms, beat_start_ts;
+    uri_t *uri;
+    char *extra_header;
+    int64_t beat_interval, beat_remain_ms, beat_start_ts;
     on_open_cb onopen;
     on_message_cb onmessage;
     on_error_cb onerror;
     on_close_cb onclose;
     void *cbdata;
 
-	int sockfd;
-	unsigned int flags;
-	wsclient_frame_t *current_frame;
+    int sockfd;
+    unsigned int flags;
+    wsclient_frame_t *current_frame;
 
-	SSL_CTX *ssl_ctx;
-	SSL *ssl;
+    SSL_CTX *ssl_ctx;
+    SSL *ssl;
 } wsclient;
 
 static const char *WEBSOCKET_UUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -196,15 +197,15 @@ wsclient_t *wsclient_new(wsclient_config_t *config) {
     c->send = (int (*)(wsclient *, const uint8_t *, size_t len))wsclient_send;
     c->send_text = (int (*)(wsclient *, const char *))wsclient_send_text;
 
-    if(pthread_mutex_init(&c->lock, NULL) != 0) {
+    if((c->lock = xSemaphoreCreateMutex()) == NULL) {
         fprintf(stderr, "Unable to init mutex in wsclient_new.\n");
         exit(WS_EXIT_PTHREAD_MUTEX_INIT);
     }
-    if(pthread_mutex_init(&c->send_lock, NULL) != 0) {
+    if((c->send_lock = xSemaphoreCreateMutex()) == NULL) {
         fprintf(stderr, "Unable to init send lock in wsclient_new.\n");
         exit(WS_EXIT_PTHREAD_MUTEX_INIT);
     }
-    if(pthread_mutex_init(&c->beat_lock, NULL) != 0) {
+    if((c->beat_lock = xSemaphoreCreateMutex()) == NULL) {
         fprintf(stderr, "Unable to init beat lock in wsclient_new.\n");
         exit(WS_EXIT_PTHREAD_MUTEX_INIT);
     }
@@ -225,7 +226,7 @@ wsclient_t *wsclient_new(wsclient_config_t *config) {
 
     c->flags |= CLIENT_CONNECTING;
 
-    if(pthread_create(&c->handshake_thread, NULL, (void *(*)(void *))wsclient_handshake_thread, (void *)c)) {
+    if(xTaskCreate((TaskFunction_t)wsclient_handshake_thread, "handshake task", 1024, (void *)c, 2, &c->handshake_task) != pdPASS) {
         fprintf(stderr, "Unable to create handshake main_thread.\n");
         exit(WS_EXIT_PTHREAD_CREATE);
     }
@@ -235,16 +236,19 @@ wsclient_t *wsclient_new(wsclient_config_t *config) {
 static void wsclient_run(wsclient *c) {
     printf("wsclient_run()\n");
     if(c->flags & CLIENT_CONNECTING) {
-        pthread_join(c->handshake_thread, NULL);
-        pthread_mutex_lock(&c->lock);
+        // There is no explicit function in rtos alike pthread_join, need implement it by semaphore/queue!
+        // pthread_join(c->handshake_task, NULL);
+        xSemaphoreTake(c->lock, portMAX_DELAY);
         c->flags &= ~CLIENT_CONNECTING;
-        pthread_mutex_unlock(&c->lock);
+        xSemaphoreGive(&c->lock);
+        xSemaphoreGive(c->lock);
     }
     if(c->sockfd) {
-        pthread_create(&c->run_thread, NULL, (void *(*)(void *))wsclient_run_thread, (void *)c);
+        xTaskCreate((TaskFunction_t)wsclient_run_thread, "run task", 1024, (void *)c, 2, &c->run_task);
     }
-    if(c->run_thread) {
-        pthread_join(c->run_thread, NULL);
+    if(c->run_task) {
+        // There is no explicit function in rtos alike pthread_join, need implement it by semaphore/queue!
+        // pthread_join(c->run_task, NULL);
     }
 }
 
@@ -254,29 +258,29 @@ static int wsclient_get_socket(wsclient *c) {
 
 static void *wsclient_beat_thread(wsclient *c) {
     printf("wsclient_beat_thread()\n");
-    pthread_mutex_lock(&c->beat_lock);
+    xSemaphoreTake(c->beat_lock, portMAX_DELAY);
     c->beat_start_ts = get_current_time_millis();
     c->beat_remain_ms = c->beat_interval;
-    pthread_mutex_unlock(&c->beat_lock);
+    xSemaphoreGive(&c->beat_lock);
     while(true) {
         if (c->beat_remain_ms > 1000) {
             usleep(1000*1000);
         } else if (c->beat_remain_ms > 0) {
             usleep(c->beat_remain_ms * 1000);
         }
-        pthread_mutex_lock(&c->beat_lock);
+        xSemaphoreTake(c->beat_lock, portMAX_DELAY);
         c->beat_remain_ms = c->beat_interval + c->beat_start_ts - get_current_time_millis();
         //printf("beat countdown: %"PRId64"\n", c->beat_remain_ms);
         if(c->beat_interval <= 0) {
-            pthread_mutex_unlock(&c->beat_lock);
+            xSemaphoreGive(&c->beat_lock);
             break;
         } else if(c->beat_remain_ms <= 0) {
             c->beat_remain_ms = c->beat_interval;
             c->beat_start_ts = get_current_time_millis();
-            pthread_mutex_unlock(&c->beat_lock);
+            xSemaphoreGive(&c->beat_lock);
             wsclient_ping(c);
         } else {
-            pthread_mutex_unlock(&c->beat_lock);
+            xSemaphoreGive(&c->beat_lock);
         }
     }
     fprintf(stderr, "wsclient beat thread exited.\n");
@@ -285,8 +289,8 @@ static void *wsclient_beat_thread(wsclient *c) {
 
 static void wsclient_beat_start(wsclient *c) {
     printf("wsclient_beat_start()\n");
-    int ret = pthread_create(&c->beat_thead, NULL, (void *(*)(void *))wsclient_beat_thread, (void *)c);
-    if (ret != 0) {
+    BaseType_t ret = xTaskCreate((TaskFunction_t)wsclient_beat_thread, "beat task", 1024, (void *)c, 2, &c->beat_task);
+    if (ret != pdPASS) {
         fprintf(stderr, "Unable to create heart beat thread!\n");
         exit(WS_EXIT_PTHREAD_CREATE);
     }
@@ -294,17 +298,17 @@ static void wsclient_beat_start(wsclient *c) {
 
 static void wsclient_beat_reset(wsclient *c) {
     printf("wsclient_beat_reset()\n");
-    pthread_mutex_unlock(&c->beat_lock);
+    xSemaphoreTake(c->beat_lock, portMAX_DELAY);
     c->beat_remain_ms = c->beat_interval;
     c->beat_start_ts = get_current_time_millis();
-    pthread_mutex_unlock(&c->beat_lock);
+    xSemaphoreGive(&c->beat_lock);
 }
 
 static void wsclient_beat_stop(wsclient *c) {
     printf("wsclient_beat_stop()\n");
-    pthread_mutex_lock(&c->beat_lock);
+    xSemaphoreTake(c->beat_lock, portMAX_DELAY);
     c->beat_interval = -1; // use this variable to check if quit beat thread
-    pthread_mutex_unlock(&c->beat_lock);
+    xSemaphoreGive(&c->beat_lock);
 }
 
 static void *wsclient_run_thread(wsclient *c) {
@@ -350,7 +354,8 @@ static void *wsclient_run_thread(wsclient *c) {
 
     if(c->beat_interval > 0) {
         wsclient_beat_stop(c);
-        pthread_join(c->beat_thead, NULL); // wait beat thread exit
+        // There is no explicit function in rtos alike pthread_join, need implement it by semaphore/queue!
+        // pthread_join(c->beat_task, NULL); // wait beat thread exit
     }
 
     if(c->flags & CLIENT_IS_SSL) {
@@ -365,9 +370,9 @@ static void *wsclient_run_thread(wsclient *c) {
         free(c->extra_header);
     }
     wsclient_cleanup_frames(c->current_frame);
-    pthread_mutex_destroy(&c->lock);
-    pthread_mutex_destroy(&c->send_lock);
-    pthread_mutex_destroy(&c->beat_lock);
+    vSemaphoreDelete(&c->lock);
+    vSemaphoreDelete(&c->send_lock);
+    vSemaphoreDelete(&c->beat_lock);
     free(c);
     return NULL;
 }
@@ -385,12 +390,12 @@ void wsclient_shutdown(wsclient *c) {
     memcpy(data+2, &mask_int, sizeof(mask_int));
     data[0] = 0x88;
     data[1] = 0x80;
-    pthread_mutex_lock(&c->send_lock);
+    xSemaphoreTake(c->send_lock, portMAX_DELAY);
     do {
         n = _wsclient_write(c, (void *)data, sizeof(data));
         i += n;
     } while(i < 6 && n > 0);
-    pthread_mutex_unlock(&c->send_lock);
+    xSemaphoreGive(&c->send_lock);
     if(n < 0) {
         if(c->onerror) {
             err = wsclient_new_error(WS_DO_CLOSE_SEND_ERR);
@@ -401,9 +406,9 @@ void wsclient_shutdown(wsclient *c) {
         }
         return;
     }
-    pthread_mutex_lock(&c->lock);
+    xSemaphoreTake(c->lock, portMAX_DELAY);
     c->flags |= CLIENT_SENT_CLOSE_FRAME;
-    pthread_mutex_unlock(&c->lock);
+    xSemaphoreGive(&c->lock);
 }
 
 static void wsclient_ping(wsclient *c) {
@@ -419,12 +424,12 @@ static void wsclient_ping(wsclient *c) {
     memcpy(data+2, &mask_int, sizeof(mask_int));
     data[0] = 0x89;
     data[1] = 0x80;
-    pthread_mutex_lock(&c->send_lock);
+    xSemaphoreTake(c->send_lock, portMAX_DELAY);
     do {
         n = _wsclient_write(c, data, sizeof(data));
         i += n;
     } while(i < 6 && n > 0);
-    pthread_mutex_unlock(&c->send_lock);
+    xSemaphoreGive(&c->send_lock);
     if(n < 0) {
         if(c->onerror) {
             err = wsclient_new_error(WS_DO_PING_SEND_ERR);
@@ -450,12 +455,12 @@ static void wsclient_pong(wsclient *c) {
     memcpy(data+2, &mask_int, sizeof(mask_int));
     data[0] = 0x8A;
     data[1] = 0x80;
-    pthread_mutex_lock(&c->send_lock);
+    xSemaphoreTake(c->send_lock, portMAX_DELAY);
     do {
         n = _wsclient_write(c, data, sizeof(data));
         i += n;
     } while(i < 6 && n > 0);
-    pthread_mutex_unlock(&c->send_lock);
+    xSemaphoreGive(&c->send_lock);
     if(n < 0) {
         if(c->onerror) {
             err = wsclient_new_error(WS_DO_PONG_SEND_ERR);
@@ -480,7 +485,7 @@ static void wsclient_handle_control_frame(wsclient *c, wsclient_frame_t *ctl_fra
     srand(tv.tv_sec * tv.tv_usec);
     mask_int = rand();
     memcpy(mask, &mask_int, sizeof(mask_int));
-    pthread_mutex_lock(&c->lock);
+    xSemaphoreTake(c->lock, portMAX_DELAY);
     switch(ctl_frame->opcode) {
         case 0x08:
             //close frame
@@ -491,12 +496,12 @@ static void wsclient_handle_control_frame(wsclient *c, wsclient_frame_t *ctl_fra
                 }
                 *(ctl_frame->rawdata + 1) |= 0x80; //turn mask bit on
                 i = 0;
-                pthread_mutex_lock(&c->send_lock);
+                xSemaphoreTake(c->send_lock, portMAX_DELAY);
                 while(i < ctl_frame->payload_offset + ctl_frame->payload_len && n >= 0) {
                     n = _wsclient_write(c, ctl_frame->rawdata + i, ctl_frame->payload_offset + ctl_frame->payload_len - i);
                     i += n;
                 }
-                pthread_mutex_unlock(&c->send_lock);
+                xSemaphoreGive(&c->send_lock);
                 if(n < 0) {
                     if(c->onerror) {
                         err = wsclient_new_error(WS_HANDLE_CTL_FRAME_SEND_ERR);
@@ -514,29 +519,29 @@ static void wsclient_handle_control_frame(wsclient *c, wsclient_frame_t *ctl_fra
             printf("received a ping frame, reply with a pong.");
             if((c->flags & CLIENT_SHOULD_CLOSE) == 0) {
                 // Server sent ping.  Send pong frame as acknowledgement.
-				for(i=0; i<ctl_frame->payload_len; i++) {
-					*(ctl_frame->rawdata + ctl_frame->payload_offset + i) ^= (mask[i % 4] & 0xff); //mask payload
+                for(i=0; i<ctl_frame->payload_len; i++) {
+                    *(ctl_frame->rawdata + ctl_frame->payload_offset + i) ^= (mask[i % 4] & 0xff); //mask payload
                 }
-				*(ctl_frame->rawdata + 1) |= 0x80; //turn mask bit on
-				i = 0;
-				// change opcode to 0xA (Pong Frame)
-				*(ctl_frame->rawdata) = (*(ctl_frame->rawdata) & 0xf0) | 0x0A;
-				pthread_mutex_lock(&c->send_lock);
-				while(i < ctl_frame->payload_offset + ctl_frame->payload_len && n >= 0) {
-					n = _wsclient_write(c, ctl_frame->rawdata + i, ctl_frame->payload_offset + ctl_frame->payload_len - i);
-					i += n;
-				}
-				pthread_mutex_unlock(&c->send_lock);
-				if(n < 0) {
-					if(c->onerror) {
-						err = wsclient_new_error(WS_HANDLE_CTL_FRAME_SEND_ERR);
-						err->extra_code = n;
-						c->onerror((wsclient_t *)c, err, c->cbdata);
-						free(err);
-						err = NULL;
-					}
-				}
-			}
+                *(ctl_frame->rawdata + 1) |= 0x80; //turn mask bit on
+                i = 0;
+                // change opcode to 0xA (Pong Frame)
+                *(ctl_frame->rawdata) = (*(ctl_frame->rawdata) & 0xf0) | 0x0A;
+                xSemaphoreTake(c->send_lock, portMAX_DELAY);
+                while(i < ctl_frame->payload_offset + ctl_frame->payload_len && n >= 0) {
+                    n = _wsclient_write(c, ctl_frame->rawdata + i, ctl_frame->payload_offset + ctl_frame->payload_len - i);
+                    i += n;
+                }
+                xSemaphoreGive(&c->send_lock);
+                if(n < 0) {
+                    if(c->onerror) {
+                        err = wsclient_new_error(WS_HANDLE_CTL_FRAME_SEND_ERR);
+                        err->extra_code = n;
+                        c->onerror((wsclient_t *)c, err, c->cbdata);
+                        free(err);
+                        err = NULL;
+                    }
+                }
+            }
             break;
         case 0x0A:
             // pong frame
@@ -553,13 +558,13 @@ static void wsclient_handle_control_frame(wsclient *c, wsclient_frame_t *ctl_fra
     ctl_frame->prev_frame = ptr;
     ctl_frame->rawdata = (uint8_t *)malloc(FRAME_CHUNK_LENGTH);
     memset(ctl_frame->rawdata, 0, FRAME_CHUNK_LENGTH);
-    pthread_mutex_unlock(&c->lock);
+    xSemaphoreGive(&c->lock);
 }
 
 static inline void wsclient_in_data(wsclient *c, uint8_t in) {
     wsclient_frame_t *current = NULL, *new = NULL;
     unsigned char payload_len_short;
-    pthread_mutex_lock(&c->lock);
+    xSemaphoreTake(c->lock, portMAX_DELAY);
     if(c->current_frame == NULL) {
         c->current_frame = (wsclient_frame_t *)malloc(sizeof(wsclient_frame_t));
         memset(c->current_frame, 0, sizeof(wsclient_frame_t));
@@ -575,7 +580,7 @@ static inline void wsclient_in_data(wsclient *c, uint8_t in) {
         memset(current->rawdata + current->rawdata_idx, 0, current->rawdata_sz - current->rawdata_idx);
     }
     *(current->rawdata + current->rawdata_idx++) = in;
-    pthread_mutex_unlock(&c->lock);
+    xSemaphoreGive(&c->lock);
     int is_completed = wsclient_complete_frame(c, current);
     if(is_completed == 1) {
         if(current->fin == 1) {
@@ -681,9 +686,9 @@ static int wsclient_complete_frame(wsclient *c, wsclient_frame_t *frame) {
             free(err);
             err = NULL;
         }
-        pthread_mutex_lock(&c->lock);
+        xSemaphoreTake(c->lock, portMAX_DELAY);
         c->flags |= CLIENT_SHOULD_CLOSE;
-        pthread_mutex_unlock(&c->lock);
+        xSemaphoreGive(&c->lock);
         return 0;
     }
     payload_len_short = *(frame->rawdata+1) & 0x7f;
@@ -787,7 +792,7 @@ static void *wsclient_handshake_thread(wsclient *c) {
         fprintf(stderr, "Invalid scheme for URI: %s\n", c->uri->scheme);
         exit(WS_EXIT_BAD_SCHEME);
     }
-    pthread_mutex_lock(&c->lock);
+    xSemaphoreTake(c->lock, portMAX_DELAY);
     if(strcmp(c->uri->scheme, "ws") == 0) {
         if(c->uri->authority.port == NULL) {
             c->uri->authority.port = strdup("80");
@@ -798,7 +803,7 @@ static void *wsclient_handshake_thread(wsclient *c) {
         }
         c->flags |= CLIENT_IS_SSL;
     }
-    pthread_mutex_unlock(&c->lock);
+    xSemaphoreGive(&c->lock);
 
     sockfd = wsclient_open_connection(c->uri->authority.host, c->uri->authority.port);
     if(sockfd < 0) {
@@ -832,9 +837,9 @@ static void *wsclient_handshake_thread(wsclient *c) {
         }
     }
 
-    pthread_mutex_lock(&c->lock);
+    xSemaphoreTake(c->lock, portMAX_DELAY);
     c->sockfd = sockfd;
-    pthread_mutex_unlock(&c->lock);
+    xSemaphoreGive(&c->lock);
 
     //perform handshake
     //generate nonce
@@ -980,9 +985,9 @@ static void *wsclient_handshake_thread(wsclient *c) {
         return NULL;
     }
 
-    pthread_mutex_lock(&c->lock);
+    xSemaphoreTake(c->lock, portMAX_DELAY);
     c->flags &= ~CLIENT_CONNECTING;
-    pthread_mutex_unlock(&c->lock);
+    xSemaphoreGive(&c->lock);
     if(c->onopen != NULL) {
         c->onopen((wsclient_t *)c, c->cbdata);
     }
@@ -1221,12 +1226,12 @@ int wsclient_send(wsclient *c, const uint8_t *bindata, size_t bindata_len)  {
 
     sent = 0;
     i = 0;
-    pthread_mutex_lock(&c->send_lock);
+    xSemaphoreTake(&c->send_lock);
     while(sent < frame_size && i >= 0) {
         i = _wsclient_write(c, data+sent, frame_size - sent);
         sent += i;
     }
-    pthread_mutex_unlock(&c->send_lock);
+    xSemaphoreGive(&c->send_lock);
     if(i < 0) {
         if(c->onerror) {
             err = wsclient_new_error(WS_SEND_SEND_ERR);
@@ -1346,12 +1351,12 @@ int wsclient_send_text(wsclient *c, const char *text) {
     sent = 0;
     i = 0;
 
-    pthread_mutex_lock(&c->send_lock);
+    xSemaphoreTake(c->send_lock, portMAX_DELAY);
     while(sent < frame_size && i >= 0) {
         i = _wsclient_write(c, data+sent, frame_size - sent);
         sent += i;
     }
-    pthread_mutex_unlock(&c->send_lock);
+    xSemaphoreGive(&c->send_lock);
 
     if(i < 0) {
         if(c->onerror) {
