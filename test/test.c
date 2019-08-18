@@ -13,7 +13,7 @@
 typedef struct {
   TaskHandle_t wstask;
   wsclient_t *wsclient;
-  int is_received;
+  bool is_received;
 } wsclient_test_t;
 
 static wsclient_test_t wstest;
@@ -34,7 +34,9 @@ static int onmessage(wsclient_t *client, wsclient_message_t *msg, wsclient_test_
   memset(text, 0, msg->payload_len+1);
   memcpy(text, msg->payload, msg->payload_len);
   printf("received echo: %s\n", text);
-  wstest->is_received = 1;
+  if(strcmp(text, "hello websocket") == 0) {
+    wstest->is_received = true;
+  }
   free(text);
   return 0;
 }
@@ -46,7 +48,6 @@ static int onerror(wsclient_t *client, wsclient_error_t *err, wsclient_test_t *w
 
 static int onclose(wsclient_t *client, wsclient_test_t *wstest) {
   printf("onclose()\n");
-  wstest->is_conn = false;
   return 0;
 }
 
@@ -66,7 +67,7 @@ static void wsclient_main(wsclient_test_t *wstest) {
 }
 
 void user_init() {
-  wstest.is_received = 0;
+  wstest.is_received = false;
   wstest.wstask = NULL;
   wstest.wsclient = NULL;
   xTaskCreate((TaskFunction_t)wsclient_main, "wsclient task", 1024, (void *)&wstest, 2, &wstest.wstask);
@@ -77,7 +78,7 @@ void user_init() {
   printf("Connection setup, now send hello and waiting for echo...\n");
   wstest.wsclient->send_text(wstest.wsclient, "hello websocket");
   while(!wstest.is_received) {
-    usleep(1000);
+    usleep(100*1000);
   }
   printf("Got echo, it works.\n");
   wstest.wsclient->shutdown(wstest.wsclient);

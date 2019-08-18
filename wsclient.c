@@ -240,7 +240,6 @@ static void wsclient_run(wsclient *c) {
         // pthread_join(c->handshake_task, NULL);
         xSemaphoreTake(c->lock, portMAX_DELAY);
         c->flags &= ~CLIENT_CONNECTING;
-        xSemaphoreGive(&c->lock);
         xSemaphoreGive(c->lock);
     }
     if(c->sockfd) {
@@ -261,7 +260,7 @@ static void *wsclient_beat_thread(wsclient *c) {
     xSemaphoreTake(c->beat_lock, portMAX_DELAY);
     c->beat_start_ts = get_current_time_millis();
     c->beat_remain_ms = c->beat_interval;
-    xSemaphoreGive(&c->beat_lock);
+    xSemaphoreGive(c->beat_lock);
     while(true) {
         if (c->beat_remain_ms > 1000) {
             usleep(1000*1000);
@@ -272,15 +271,15 @@ static void *wsclient_beat_thread(wsclient *c) {
         c->beat_remain_ms = c->beat_interval + c->beat_start_ts - get_current_time_millis();
         //printf("beat countdown: %"PRId64"\n", c->beat_remain_ms);
         if(c->beat_interval <= 0) {
-            xSemaphoreGive(&c->beat_lock);
+            xSemaphoreGive(c->beat_lock);
             break;
         } else if(c->beat_remain_ms <= 0) {
             c->beat_remain_ms = c->beat_interval;
             c->beat_start_ts = get_current_time_millis();
-            xSemaphoreGive(&c->beat_lock);
+            xSemaphoreGive(c->beat_lock);
             wsclient_ping(c);
         } else {
-            xSemaphoreGive(&c->beat_lock);
+            xSemaphoreGive(c->beat_lock);
         }
     }
     fprintf(stderr, "wsclient beat thread exited.\n");
@@ -301,14 +300,14 @@ static void wsclient_beat_reset(wsclient *c) {
     xSemaphoreTake(c->beat_lock, portMAX_DELAY);
     c->beat_remain_ms = c->beat_interval;
     c->beat_start_ts = get_current_time_millis();
-    xSemaphoreGive(&c->beat_lock);
+    xSemaphoreGive(c->beat_lock);
 }
 
 static void wsclient_beat_stop(wsclient *c) {
     printf("wsclient_beat_stop()\n");
     xSemaphoreTake(c->beat_lock, portMAX_DELAY);
     c->beat_interval = -1; // use this variable to check if quit beat thread
-    xSemaphoreGive(&c->beat_lock);
+    xSemaphoreGive(c->beat_lock);
 }
 
 static void *wsclient_run_thread(wsclient *c) {
@@ -395,7 +394,7 @@ void wsclient_shutdown(wsclient *c) {
         n = _wsclient_write(c, (void *)data, sizeof(data));
         i += n;
     } while(i < 6 && n > 0);
-    xSemaphoreGive(&c->send_lock);
+    xSemaphoreGive(c->send_lock);
     if(n < 0) {
         if(c->onerror) {
             err = wsclient_new_error(WS_DO_CLOSE_SEND_ERR);
@@ -408,7 +407,7 @@ void wsclient_shutdown(wsclient *c) {
     }
     xSemaphoreTake(c->lock, portMAX_DELAY);
     c->flags |= CLIENT_SENT_CLOSE_FRAME;
-    xSemaphoreGive(&c->lock);
+    xSemaphoreGive(c->lock);
 }
 
 static void wsclient_ping(wsclient *c) {
@@ -429,7 +428,7 @@ static void wsclient_ping(wsclient *c) {
         n = _wsclient_write(c, data, sizeof(data));
         i += n;
     } while(i < 6 && n > 0);
-    xSemaphoreGive(&c->send_lock);
+    xSemaphoreGive(c->send_lock);
     if(n < 0) {
         if(c->onerror) {
             err = wsclient_new_error(WS_DO_PING_SEND_ERR);
@@ -460,7 +459,7 @@ static void wsclient_pong(wsclient *c) {
         n = _wsclient_write(c, data, sizeof(data));
         i += n;
     } while(i < 6 && n > 0);
-    xSemaphoreGive(&c->send_lock);
+    xSemaphoreGive(c->send_lock);
     if(n < 0) {
         if(c->onerror) {
             err = wsclient_new_error(WS_DO_PONG_SEND_ERR);
@@ -501,7 +500,7 @@ static void wsclient_handle_control_frame(wsclient *c, wsclient_frame_t *ctl_fra
                     n = _wsclient_write(c, ctl_frame->rawdata + i, ctl_frame->payload_offset + ctl_frame->payload_len - i);
                     i += n;
                 }
-                xSemaphoreGive(&c->send_lock);
+                xSemaphoreGive(c->send_lock);
                 if(n < 0) {
                     if(c->onerror) {
                         err = wsclient_new_error(WS_HANDLE_CTL_FRAME_SEND_ERR);
@@ -531,7 +530,7 @@ static void wsclient_handle_control_frame(wsclient *c, wsclient_frame_t *ctl_fra
                     n = _wsclient_write(c, ctl_frame->rawdata + i, ctl_frame->payload_offset + ctl_frame->payload_len - i);
                     i += n;
                 }
-                xSemaphoreGive(&c->send_lock);
+                xSemaphoreGive(c->send_lock);
                 if(n < 0) {
                     if(c->onerror) {
                         err = wsclient_new_error(WS_HANDLE_CTL_FRAME_SEND_ERR);
@@ -558,7 +557,7 @@ static void wsclient_handle_control_frame(wsclient *c, wsclient_frame_t *ctl_fra
     ctl_frame->prev_frame = ptr;
     ctl_frame->rawdata = (uint8_t *)malloc(FRAME_CHUNK_LENGTH);
     memset(ctl_frame->rawdata, 0, FRAME_CHUNK_LENGTH);
-    xSemaphoreGive(&c->lock);
+    xSemaphoreGive(c->lock);
 }
 
 static inline void wsclient_in_data(wsclient *c, uint8_t in) {
@@ -580,7 +579,7 @@ static inline void wsclient_in_data(wsclient *c, uint8_t in) {
         memset(current->rawdata + current->rawdata_idx, 0, current->rawdata_sz - current->rawdata_idx);
     }
     *(current->rawdata + current->rawdata_idx++) = in;
-    xSemaphoreGive(&c->lock);
+    xSemaphoreGive(c->lock);
     int is_completed = wsclient_complete_frame(c, current);
     if(is_completed == 1) {
         if(current->fin == 1) {
@@ -688,7 +687,7 @@ static int wsclient_complete_frame(wsclient *c, wsclient_frame_t *frame) {
         }
         xSemaphoreTake(c->lock, portMAX_DELAY);
         c->flags |= CLIENT_SHOULD_CLOSE;
-        xSemaphoreGive(&c->lock);
+        xSemaphoreGive(c->lock);
         return 0;
     }
     payload_len_short = *(frame->rawdata+1) & 0x7f;
@@ -803,7 +802,7 @@ static void *wsclient_handshake_thread(wsclient *c) {
         }
         c->flags |= CLIENT_IS_SSL;
     }
-    xSemaphoreGive(&c->lock);
+    xSemaphoreGive(c->lock);
 
     sockfd = wsclient_open_connection(c->uri->authority.host, c->uri->authority.port);
     if(sockfd < 0) {
@@ -839,7 +838,7 @@ static void *wsclient_handshake_thread(wsclient *c) {
 
     xSemaphoreTake(c->lock, portMAX_DELAY);
     c->sockfd = sockfd;
-    xSemaphoreGive(&c->lock);
+    xSemaphoreGive(c->lock);
 
     //perform handshake
     //generate nonce
@@ -987,7 +986,7 @@ static void *wsclient_handshake_thread(wsclient *c) {
 
     xSemaphoreTake(c->lock, portMAX_DELAY);
     c->flags &= ~CLIENT_CONNECTING;
-    xSemaphoreGive(&c->lock);
+    xSemaphoreGive(c->lock);
     if(c->onopen != NULL) {
         c->onopen((wsclient_t *)c, c->cbdata);
     }
@@ -1226,12 +1225,12 @@ int wsclient_send(wsclient *c, const uint8_t *bindata, size_t bindata_len)  {
 
     sent = 0;
     i = 0;
-    xSemaphoreTake(&c->send_lock);
+    xSemaphoreTake(c->send_lock, portMAX_DELAY);
     while(sent < frame_size && i >= 0) {
         i = _wsclient_write(c, data+sent, frame_size - sent);
         sent += i;
     }
-    xSemaphoreGive(&c->send_lock);
+    xSemaphoreGive(c->send_lock);
     if(i < 0) {
         if(c->onerror) {
             err = wsclient_new_error(WS_SEND_SEND_ERR);
@@ -1356,7 +1355,7 @@ int wsclient_send_text(wsclient *c, const char *text) {
         i = _wsclient_write(c, data+sent, frame_size - sent);
         sent += i;
     }
-    xSemaphoreGive(&c->send_lock);
+    xSemaphoreGive(c->send_lock);
 
     if(i < 0) {
         if(c->onerror) {
